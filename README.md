@@ -1,5 +1,10 @@
 # claude-skills
 
+**Language / 语言 / Idioma / Langue / Idioma / 言語**
+[English](./README.md) · [中文](./README.zh.md) · [Español](./README.es.md) · [Français](./README.fr.md) · [Português](./README.pt.md) · [日本語](./README.ja.md)
+
+---
+
 A curated, security-audited collection of Claude Code skills.
 Every skill in this repo is scanned weekly by the built-in `skill-security-auditor` before it reaches you.
 
