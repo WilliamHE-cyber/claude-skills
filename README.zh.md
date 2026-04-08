@@ -5,6 +5,8 @@
 
 ---
 
+> **权威来源：** 本仓库 [github.com/WilliamHE-cyber/claude-skills](https://github.com/WilliamHE-cyber/claude-skills) 是唯一官方版本。可能存在 Fork 和镜像，如有疑问，以本仓库的审计历史和已批准版本为准。Copyright © WilliamHE-cyber。
+
 一个经过安全审计的 Claude Code skills 精选集合。
 所有 skill 在发布前均由内置的 `skill-security-auditor` 每周自动扫描。
 

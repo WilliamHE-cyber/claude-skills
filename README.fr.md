@@ -5,6 +5,8 @@
 
 ---
 
+> **Source canonique :** Ce dépôt — [github.com/WilliamHE-cyber/claude-skills](https://github.com/WilliamHE-cyber/claude-skills) — est la seule version officielle. Des forks et miroirs peuvent exister ; en cas de doute, référez-vous ici pour l'historique d'audit officiel. Copyright © WilliamHE-cyber.
+
 Une collection organisée de skills Claude Code, auditées en matière de sécurité.
 Chaque skill est analysée chaque semaine par le `skill-security-auditor` intégré avant publication.
 

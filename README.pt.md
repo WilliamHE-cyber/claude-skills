@@ -5,6 +5,8 @@
 
 ---
 
+> **Fonte canônica:** Este repositório — [github.com/WilliamHE-cyber/claude-skills](https://github.com/WilliamHE-cyber/claude-skills) — é a única versão oficial. Forks e espelhos podem existir; em caso de dúvida, consulte aqui o histórico de auditoria autoritativo. Copyright © WilliamHE-cyber.
+
 Uma coleção curada de skills para Claude Code, auditadas em segurança.
 Cada skill é verificada semanalmente pelo `skill-security-auditor` integrado antes de ser publicada.
 

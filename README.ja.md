@@ -5,6 +5,8 @@
 
 ---
 
+> **公式ソース：** このリポジトリ [github.com/WilliamHE-cyber/claude-skills](https://github.com/WilliamHE-cyber/claude-skills) が唯一の公式バージョンです。フォークやミラーが存在する場合がありますが、不明な点は公式の監査履歴と承認済みリリースについてここを参照してください。Copyright © WilliamHE-cyber.
+
 セキュリティ監査済みの Claude Code スキルのキュレーションコレクションです。
 すべてのスキルは、公開前に組み込みの `skill-security-auditor` によって毎週スキャンされます。
 
