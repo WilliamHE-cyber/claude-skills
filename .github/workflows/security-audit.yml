@@ -1,0 +1,108 @@
+name: Skill Security Audit
+
+on:
+  pull_request:
+    branches: [main]
+  push:
+    branches: [main]
+
+jobs:
+  audit:
+    name: Security Gate
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Detect changed skill directories
+        id: changed
+        run: |
+          if [ "${{ github.event_name }}" = "pull_request" ]; then
+            BASE=${{ github.event.pull_request.base.sha }}
+            HEAD=${{ github.event.pull_request.head.sha }}
+          else
+            BASE=${{ github.event.before }}
+            HEAD=${{ github.event.after }}
+          fi
+
+          # Get top-level directories that changed (each is a skill)
+          CHANGED=$(git diff --name-only $BASE $HEAD 2>/dev/null \
+            | grep '/' \
+            | cut -d'/' -f1 \
+            | sort -u \
+            | grep -v '^\.' \
+            | grep -v '^\.github$' \
+            || true)
+
+          echo "dirs=$CHANGED" >> $GITHUB_OUTPUT
+          echo "Changed skill dirs: $CHANGED"
+
+      - name: Run security scan on changed skills
+        id: scan
+        run: |
+          SCANNER="skill-security-auditor/references/risk_scorer.py"
+          FAILED=0
+          RESULTS=""
+
+          for SKILL in ${{ steps.changed.outputs.dirs }}; do
+            if [ ! -d "$SKILL" ]; then continue; fi
+            if [ "$SKILL" = "skill-security-auditor" ]; then
+              echo "⚡ Skipping self-scan of skill-security-auditor (self-exempt)"
+              continue
+            fi
+
+            echo "🔍 Scanning: $SKILL"
+            OUTPUT=$(python3 $SCANNER "$SKILL" --json --no-log 2>/dev/null)
+            SCORE=$(echo "$OUTPUT" | python3 -c "
+          import json,sys
+          d=json.load(sys.stdin)
+          print(f\"{d[0]['final_score']:.1f}|{d[0]['risk_level']}\")" 2>/dev/null || echo "ERR|UNKNOWN")
+
+            SCORE_VAL=$(echo $SCORE | cut -d'|' -f1)
+            LEVEL=$(echo $SCORE | cut -d'|' -f2)
+
+            RESULTS="$RESULTS\n  $SKILL: $SCORE_VAL/100 [$LEVEL]"
+            echo "  → $SKILL: $SCORE_VAL/100 [$LEVEL]"
+
+            # Gate: CRITICAL (≥60) or BLOCKED (≥80) → fail the PR
+            if python3 -c "exit(0 if float('$SCORE_VAL') < 60 else 1)" 2>/dev/null; then
+              echo "  ✅ PASS"
+            else
+              echo "  ❌ FAIL — score $SCORE_VAL >= 60"
+              FAILED=1
+            fi
+          done
+
+          echo "results=$RESULTS" >> $GITHUB_OUTPUT
+          exit $FAILED
+
+      - name: Full scan on push to main
+        if: github.event_name == 'push'
+        run: |
+          echo "🔍 Full repository scan (push to main)..."
+          python3 skill-security-auditor/references/risk_scorer.py \
+            --all . --no-log 2>/dev/null || true
+
+      - name: Post summary
+        if: always()
+        run: |
+          echo "## Security Audit Results" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          if [ "${{ steps.scan.outcome }}" = "failure" ]; then
+            echo "❌ **GATE FAILED** — One or more skills scored CRITICAL or BLOCKED (≥60/100)" >> $GITHUB_STEP_SUMMARY
+            echo "" >> $GITHUB_STEP_SUMMARY
+            echo "Skills with scores ≥60 cannot be merged. Options:" >> $GITHUB_STEP_SUMMARY
+            echo "- Reduce risk: remove dangerous patterns from the skill" >> $GITHUB_STEP_SUMMARY
+            echo "- Add exemption: \`<!-- audit:exempt Dx reason: ... -->\` with justification" >> $GITHUB_STEP_SUMMARY
+            echo "- Request manual review from maintainer" >> $GITHUB_STEP_SUMMARY
+          else
+            echo "✅ **All scanned skills passed the security gate**" >> $GITHUB_STEP_SUMMARY
+          fi
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "Powered by [skill-security-auditor](./skill-security-auditor/) v0.2.1" >> $GITHUB_STEP_SUMMARY
