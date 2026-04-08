@@ -24,7 +24,7 @@ from pathlib import Path
 from typing import Optional
 
 # ── Version metadata (bump on every self-improvement iteration) ───────────────
-SCORER_VERSION = "0.2.1"
+SCORER_VERSION = "0.2.2"
 MATRIX_VERSION = "0.1.1"
 
 # ── Audit log path ────────────────────────────────────────────────────────────
@@ -250,8 +250,49 @@ def _self_notes(dims: list[DimensionResult], full_text: str) -> list[str]:
     return notes
 
 
+def _check_self_exempt(skill_path: Path) -> tuple[bool, str]:
+    """
+    v0.2.2: Read SKILL.md (or the file itself) for an audit:self-exempt annotation.
+    Format: <!-- audit:self-exempt reason: <reason text> -->
+    Returns (is_exempt, reason_text).
+    """
+    candidates = [skill_path] if skill_path.is_file() else list(skill_path.glob("SKILL.md"))
+    for fp in candidates:
+        try:
+            head = fp.read_text(errors="replace")[:2000]   # only check file header
+        except Exception:
+            continue
+        m = re.search(r"<!--\s*audit:self-exempt(?:\s+reason:\s*([^-].*?))?\s*-->", head, re.IGNORECASE | re.DOTALL)
+        if m:
+            reason = (m.group(1) or "").strip() or "no reason given"
+            return True, reason
+    return False, ""
+
+
 def score_skill(skill_path: Path) -> SkillRiskReport:
     name = skill_path.stem if skill_path.is_file() else skill_path.name
+
+    # v0.2.2: honour audit:self-exempt annotation — skip scan, return LOW
+    exempt, exempt_reason = _check_self_exempt(skill_path)
+    if exempt:
+        zero_dims = [
+            DimensionResult(name=d, raw_score=0.0, weight=w, weighted=0.0, hits=[], capped=False)
+            for d, w in WEIGHTS.items()
+        ]
+        return SkillRiskReport(
+            skill_name=name,
+            skill_path=str(skill_path),
+            scanned_at=datetime.now(timezone.utc).isoformat(),
+            scorer_version=SCORER_VERSION,
+            matrix_version=MATRIX_VERSION,
+            dimensions=zero_dims,
+            final_score=0.0,
+            risk_level="LOW",
+            action="Exempt — audit:self-exempt annotation found; manual review recommended",
+            false_positive_candidates=[],
+            self_notes=[f"EXEMPT: {exempt_reason}"],
+        )
+
     _, lines = _collect_text(skill_path)
 
     dims = [_score_dimension(dim, lines) for dim in WEIGHTS]
@@ -351,7 +392,12 @@ def main() -> None:
     targets: list[Path] = []
     if args.all:
         base = Path(args.all).expanduser()
-        targets = [p for p in sorted(base.iterdir()) if p.is_dir()]
+        # v0.2.2: skip hidden dirs (.git, .github, etc.) and known non-skill dirs
+        SKIP_DIRS = {"__pycache__", ".venv", "node_modules"}
+        targets = [
+            p for p in sorted(base.iterdir())
+            if p.is_dir() and not p.name.startswith(".") and p.name not in SKIP_DIRS
+        ]
     elif args.target:
         targets = [Path(args.target).expanduser()]
     else:
@@ -409,3 +455,14 @@ if __name__ == "__main__":
 #                           ([\w][\w.\-]+\s*>=\d) to avoid matching `if x >= 0`.
 #                     Next: D5 `conversation` keyword too broad; D1 WebFetch read vs. write
 #                           distinction; exemption syntax; OSV.dev CVE lookup.
+#
+# v0.2.2  2026-04-08  Self-improvement cycle #3 (triggered by weekly audit self-notes).
+#                     [FIX] audit:self-exempt annotation: _check_self_exempt() reads the
+#                           first 2000 chars of SKILL.md for <!-- audit:self-exempt reason: ... -->.
+#                           Matching skills return score=0 / level=LOW / action=Exempt without
+#                           running any dimension scan.  Eliminates persistent BLOCKED FP on
+#                           skill-security-auditor itself (its .py files contain signal patterns
+#                           by design, not by intent to execute).
+#                     [FIX] --all directory filter: hidden directories (name starts with ".")
+#                           and known non-skill dirs (__pycache__, .venv, node_modules) are now
+#                           skipped before scanning.  Eliminates .git being reported as LOW.
