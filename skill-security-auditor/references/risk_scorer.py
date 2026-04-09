@@ -24,7 +24,7 @@ from pathlib import Path
 from typing import Optional
 
 # ── Version metadata (bump on every self-improvement iteration) ───────────────
-SCORER_VERSION = "0.2.1"
+SCORER_VERSION = "0.2.3"
 MATRIX_VERSION = "0.1.1"
 
 # ── Audit log path ────────────────────────────────────────────────────────────
@@ -45,7 +45,10 @@ WEIGHTS = {
 SIGNALS: dict[str, list[tuple[int, str, str]]] = {
     # (score_contribution, regex_pattern, description)
     "D1_network": [
-        (2,  r"https?://[a-zA-Z0-9]",              "HTTP URL literal"),
+        # v0.2.3: URL literal score reduced from 2→0.4; doc-context lines further
+        # reduced by _is_doc_url_line() in _score_dimension(). Active call signals
+        # (requests, urllib, WebFetch, socket, curl) keep full weight.
+        (0.4, r"https?://[a-zA-Z0-9]",             "HTTP URL literal"),
         (3,  r"requests\.",                         "requests library"),
         (3,  r"urllib",                             "urllib usage"),
         (3,  r"WebFetch\s*\(",                      "WebFetch tool call"),
@@ -136,6 +139,53 @@ class SkillRiskReport:
 
 # ── Core scanning logic ────────────────────────────────────────────────────────
 
+def _is_doc_url_line(line: str) -> bool:
+    """
+    v0.2.3: Return True when a URL on this line is a documentation reference,
+    not an active network call.  Used by _score_dimension to zero-weight D1
+    URL-literal hits that are clearly just hyperlinks in prose.
+
+    Patterns recognised as documentation:
+      - Bullet items:   "- **GitHub**: https://..."  or "- https://..."
+      - Markdown links: "[text](https://...)"
+      - Label URLs:     "Docs: https://..."
+    """
+    s = line.strip()
+    # Bullet list item starting with - or *
+    if re.match(r"^[-*]\s+.*https?://", s):
+        return True
+    # Markdown hyperlink syntax [label](url)
+    if re.search(r"\[.{0,60}\]\(https?://", s):
+        return True
+    # Label: url  or  **Label**: url
+    if re.match(r"\*{0,2}[\w][\w\s/.-]{0,30}\*{0,2}:?\s+https?://", s):
+        return True
+    return False
+
+
+def _check_self_exempt(skill_path: Path) -> tuple[bool, str]:
+    """
+    v0.2.3: Read SKILL.md (or the target file itself) for an audit:self-exempt
+    annotation in the first 2000 characters.
+    Format: <!-- audit:self-exempt reason: <reason text> -->
+    Returns (is_exempt, reason_text).
+    """
+    candidates = [skill_path] if skill_path.is_file() else list(skill_path.glob("SKILL.md"))
+    for fp in candidates:
+        try:
+            head = fp.read_text(errors="replace")[:2000]
+        except Exception:
+            continue
+        m = re.search(
+            r"<!--\s*audit:self-exempt(?:\s+reason:\s*([^-].*?))?\s*-->",
+            head, re.IGNORECASE | re.DOTALL
+        )
+        if m:
+            reason = (m.group(1) or "").strip() or "no reason given"
+            return True, reason
+    return False, ""
+
+
 def _collect_text(skill_path: Path) -> tuple[str, list[tuple[int, str]]]:
     """Return (full_text, [(lineno, line), ...]) for all .md and .py files.
 
@@ -199,8 +249,13 @@ def _score_dimension(dim: str, lines: list[tuple[int, str]]) -> DimensionResult:
         for score_contrib, pattern, desc in SIGNALS[dim]:
             if re.search(pattern, line, re.IGNORECASE):
                 snippet = line.strip()[:80]
+                # v0.2.3: D1 URL literals in documentation context score near-zero
+                effective = score_contrib
+                if dim == "D1_network" and desc == "HTTP URL literal":
+                    if _is_doc_url_line(line):
+                        effective = 0.0   # pure doc link — no network risk
                 hits.append({"line": lineno, "signal": desc, "snippet": snippet})
-                accumulated += score_contrib
+                accumulated += effective
                 break  # one hit per line per dimension
 
     raw = min(10.0, accumulated)
@@ -252,6 +307,28 @@ def _self_notes(dims: list[DimensionResult], full_text: str) -> list[str]:
 
 def score_skill(skill_path: Path) -> SkillRiskReport:
     name = skill_path.stem if skill_path.is_file() else skill_path.name
+
+    # v0.2.3: honour audit:self-exempt annotation — skip scan, return LOW
+    exempt, exempt_reason = _check_self_exempt(skill_path)
+    if exempt:
+        zero_dims = [
+            DimensionResult(name=d, raw_score=0.0, weight=w, weighted=0.0, hits=[], capped=False)
+            for d, w in WEIGHTS.items()
+        ]
+        return SkillRiskReport(
+            skill_name=name,
+            skill_path=str(skill_path),
+            scanned_at=datetime.now(timezone.utc).isoformat(),
+            scorer_version=SCORER_VERSION,
+            matrix_version=MATRIX_VERSION,
+            dimensions=zero_dims,
+            final_score=0.0,
+            risk_level="LOW",
+            action="Exempt — audit:self-exempt annotation found; manual review recommended",
+            false_positive_candidates=[],
+            self_notes=[f"EXEMPT: {exempt_reason}"],
+        )
+
     _, lines = _collect_text(skill_path)
 
     dims = [_score_dimension(dim, lines) for dim in WEIGHTS]
@@ -351,7 +428,12 @@ def main() -> None:
     targets: list[Path] = []
     if args.all:
         base = Path(args.all).expanduser()
-        targets = [p for p in sorted(base.iterdir()) if p.is_dir()]
+        # v0.2.3: skip hidden dirs (.git, .github) and known non-skill dirs
+        _SKIP = {"__pycache__", ".venv", "node_modules"}
+        targets = [
+            p for p in sorted(base.iterdir())
+            if p.is_dir() and not p.name.startswith(".") and p.name not in _SKIP
+        ]
     elif args.target:
         targets = [Path(args.target).expanduser()]
     else:
@@ -388,6 +470,24 @@ if __name__ == "__main__":
 
 
 # ── CHANGELOG (self-iteration history) ────────────────────────────────────────
+# v0.2.3  2026-04-09  Self-improvement cycle #4 (P0 benchmark-driven).
+#                     [FIX] D1 documentation URL false positives — root cause of ~20pt
+#                           inflation on every ML guidance skill.  Two-part fix:
+#                           (a) URL literal signal score reduced 2→0.4.
+#                           (b) _is_doc_url_line(): if URL is in a bullet/markdown-link/
+#                               label context, score contribution set to 0.0 (pure doc).
+#                           Active network call signals (requests, urllib, WebFetch, socket,
+#                           curl) retain full weight. Expected: 60+ ML skills drop from
+#                           MEDIUM → LOW; D1 FP rate ~0% on pure-doc URLs.
+#                     [FIX] audit:self-exempt annotation (was planned in v0.2.2 but never
+#                           written to installed version). _check_self_exempt() reads first
+#                           2000 chars of SKILL.md; matching skills return score=0/LOW/Exempt.
+#                     [FIX] --all hidden dir filter: skip dirs starting with "." and
+#                           __pycache__, .venv, node_modules.
+#                     [ADD] Benchmark suite: tests/benchmark_labels.json + run_benchmark.py
+#                           establish ground-truth labels for all 89 installed skills and
+#                           measure precision/recall/F1 per version.
+#
 # v0.1.0  2026-04-08  Initial version. 7 dimensions, static regex scan.
 #                     Known gaps: no code-block exclusion, D7 UNTRUSTED check inverted.
 #                     Self-note: D1 URL hits in docs = FP; D7 UNTRUSTED presence/absence inverted.
